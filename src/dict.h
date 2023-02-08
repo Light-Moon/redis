@@ -46,9 +46,15 @@
 
 /* Unused arguments generate annoying warnings... */
 #define DICT_NOTUSED(V) ((void) V)
-
+/*
+ * 为了实现链式哈希， Redis 在每个 dictEntry 的结构设计中，除了包含指向键和值的指针，还包含了指向下一个哈希项的指针。dictEntry 结构体中包含了指向另一个 dictEntry 结构的指针 *next，这就是为用来实现链式哈希的
+ */
 typedef struct dictEntry {
     void *key;
+    /*
+     * dictEntry 结构体中，键值对的值是由一个联合体 v 定义的。这个联合体 v 中包含了指向实际值的指针 *val，还包含了无符号的 64 位整数、有符号的 64 位整数，以及 double 类的值。
+     * 这种实现方法是一种节省内存的开发小技巧，非常值得学习。因为当值为整数或双精度浮点数时，由于其本身就是 64 位，就可以不用指针指向了，而是可以直接存在键值对的结构体中，这样就避免了再用一个指针，从而节省了内存空间。
+     */
     union {
         void *val;
         uint64_t u64;
@@ -70,18 +76,27 @@ typedef struct dictType {
 
 /* This is our hash table structure. Every dictionary has two of this as we
  * implement incremental rehashing, for the old to the new table. */
+/*
+ * Hash 表被定义为一个二维数组（dictEntry **table），这个数组的每个元素是一个指向哈希项（dictEntry）的指针。
+ */
 typedef struct dictht {
-    dictEntry **table;
+    dictEntry **table;//二维数组
     unsigned long size;
     unsigned long sizemask;
     unsigned long used;
 } dictht;
 
+/*
+ * 首先，Redis 准备了两个哈希表，用于 rehash 时交替保存数据。
+ * 其次，在正常服务请求阶段，所有的键值对写入哈希表 ht[0]。
+ * 接着，当进行 rehash 时，键值对被迁移到哈希表 ht[1]中。
+ * 最后，当迁移完成后，ht[0]的空间会被释放，并把 ht[1]的地址赋值给 ht[0]，ht[1]的表大小设置为 0。这样一来，又回到了正常服务请求的阶段，ht[0]接收和服务请求，ht[1]作为下一次 rehash 时的迁移表。
+ */
 typedef struct dict {
     dictType *type;
     void *privdata;
-    dictht ht[2];
-    long rehashidx; /* rehashing not in progress if rehashidx == -1 */
+    dictht ht[2];//两个Hash表，交替使用，用于rehash操作
+    long rehashidx; /* rehashing not in progress if rehashidx == -1 */ //Hash表是否在进行rehash的标识，-1表示没有进行rehash
     int16_t pauserehash; /* If >0 rehashing is paused (<0 indicates coding error) */
 } dict;
 

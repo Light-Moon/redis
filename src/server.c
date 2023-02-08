@@ -192,6 +192,10 @@ struct redisServer server; /* Server global state */
  *    TYPE, EXPIRE*, PEXPIRE*, TTL, PTTL, ...
  */
 
+/*
+ * redisCommandTable 数组是在 server.c 文件中定义的，它的每一个元素是一个 redisCommand 结构体类型的记录，对应了 Redis 实现的一条命令。
+ * 也就是说，redisCommand 结构体中就记录了当前命令所对应的实现函数是什么。
+ */
 struct redisCommand redisCommandTable[] = {
     {"module",moduleCommand,-2,
      "admin no-script",
@@ -1589,6 +1593,7 @@ int incrementallyRehash(int dbid) {
  * memory pages are copied). The goal of this function is to update the ability
  * for dict.c to resize the hash tables accordingly to the fact we have an
  * active fork child running. */
+//updateDictResizePolicy 函数是用来启用或禁用 rehash 扩容功能的，这个函数调用 dictEnableResize 函数启用扩容功能的条件是：当前没有 RDB 子进程，并且也没有 AOF 子进程。
 void updateDictResizePolicy(void) {
     if (!hasActiveChildProcess())
         dictEnableResize();
@@ -2473,11 +2478,15 @@ void afterSleep(struct aeEventLoop *eventLoop) {
 }
 
 /* =========================== Server initialization ======================== */
-
+/*
+ * 为了避免在内存中反复创建这些经常被访问的数据，Redis 就采用了共享对象的设计思想。这个设计思想很简单，就是把这些常用数据创建为共享对象，当上层应用需要访问它们时，直接读取就行。
+ * createSharedObjects就是创建共享对象的函数
+ */
 void createSharedObjects(void) {
     int j;
 
     /* Shared command responses */
+    //常见回复信息  报错信息等
     shared.crlf = createObject(OBJ_STRING,sdsnew("\r\n"));
     shared.ok = createObject(OBJ_STRING,sdsnew("+OK\r\n"));
     shared.emptybulk = createObject(OBJ_STRING,sdsnew("$0\r\n\r\n"));
@@ -2608,8 +2617,9 @@ void createSharedObjects(void) {
     shared.getack = createStringObject("GETACK",6);
     shared.special_asterick = createStringObject("*",1);
     shared.special_equals = createStringObject("=",1);
-    shared.redacted = makeObjectShared(createStringObject("(redacted)",10));
+    shared.redacted = makeObjectShared(      createStringObject("(redacted)",10));
 
+    //0-9999的整数
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
             makeObjectShared(createObject(OBJ_STRING,(void*)(long)j));
@@ -2736,6 +2746,9 @@ void initServerConfig(void) {
     /* Command table -- we initialize it here as it is part of the
      * initial configuration, since command names may be changed via
      * redis.conf using the rename-command directive. */
+    //commands 成员变量的初始化是在 initServerConfig 函数中，通过调用 dictCreate 函数完成哈希表创建，再通过调用 populateCommandTable 函数，将 Redis 提供的命令名称和对应的实现函数，插入到哈希表中的。
+    //而这其中的 populateCommandTable 函数，实际上是使用到了 redisCommand 结构体数组 redisCommandTable。redisCommandTable 数组是在 server.c 文件中定义的，它的每一个元素是一个 redisCommand 结构体类型的记录，
+    //对应了 Redis 实现的一条命令。也就是说，redisCommand 结构体中就记录了当前命令所对应的实现函数是什么。
     server.commands = dictCreate(&commandTableDictType,NULL);
     server.orig_commands = dictCreate(&commandTableDictType,NULL);
     populateCommandTable();
@@ -3187,6 +3200,7 @@ void initServer(void) {
     adjustOpenFilesLimit();
     const char *clk_msg = monotonicInit();
     serverLog(LL_NOTICE, "monotonic clock: %s", clk_msg);
+    //创建事件循环框架要用的aeEventLoop结构体，并赋值给server结构体的el变量
     server.el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
     if (server.el == NULL) {
         serverLog(LL_WARNING,
@@ -3197,6 +3211,7 @@ void initServer(void) {
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
 
     /* Open the TCP listening socket for the user commands. */
+    //开始监听设置的网络端口
     if (server.port != 0 &&
         listenToPort(server.port,&server.ipfd) == C_ERR) {
         serverLog(LL_WARNING, "Failed listening on port %u (TCP), aborting.", server.port);
@@ -3228,18 +3243,25 @@ void initServer(void) {
     }
 
     /* Create the Redis databases, and initialize other internal state. */
+    //创建数据库并执行初始化操作。包括创建全局哈希表，为过期key、被BLPOP阻塞的key、将被PUSH的key和被监听的key创建相应的信息表。
     for (j = 0; j < server.dbnum; j++) {
+        //创建全局哈希表  dbDictType中指定了Hash函数
         server.db[j].dict = dictCreate(&dbDictType,NULL);
+        //创建过期key的信息表
         server.db[j].expires = dictCreate(&dbExpiresDictType,NULL);
         server.db[j].expires_cursor = 0;
+        //为被BLPOP阻塞的key创建信息表
         server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
+        //为将执行PUSH的阻塞key创建信息表
         server.db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType,NULL);
+        //为被MULTI/WATCH操作监听的key创建信息表
         server.db[j].watched_keys = dictCreate(&keylistDictType,NULL);
         server.db[j].id = j;
         server.db[j].avg_ttl = 0;
         server.db[j].defrag_later = listCreate();
         listSetFreeMethod(server.db[j].defrag_later,(void (*)(void*))sdsfree);
     }
+    //生成用于淘汰的候选key集合
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
     server.pubsub_channels = dictCreate(&keylistDictType,NULL);
     server.pubsub_patterns = dictCreate(&keylistDictType,NULL);
@@ -3294,6 +3316,7 @@ void initServer(void) {
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
      * expired keys and so forth. */
+    //创建计时器回调，为server后台任务创建定时事件，这是我们以增量方式处理许多后台操作的方式，例如客户端超时、逐出未访问过期的密钥等。
     if (aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) == AE_ERR) {
         serverPanic("Can't create event loop timers.");
         exit(1);
@@ -3301,6 +3324,7 @@ void initServer(void) {
 
     /* Create an event handler for accepting new connections in TCP and Unix
      * domain sockets. */
+    //为每一个监听的IP设置连接事件的处理函数acceptTcpHandler。当 Redis server 接收到客户端的连接请求时，就会使用注册好的 acceptTcpHandler 函数进行处理，它位于networking.c文件中。
     if (createSocketAcceptHandler(&server.ipfd, acceptTcpHandler) != C_OK) {
         serverPanic("Unrecoverable error creating TCP socket accept handler.");
     }
@@ -3313,6 +3337,9 @@ void initServer(void) {
 
     /* Register a readable event for the pipe used to awake the event loop
      * when a blocked client in a module needs attention. */
+    //redis事件驱动框架运行的基本流程：从 server 初始化时调用 aeCreateFileEvent 函数注册监听事件，到 server 初始化完成后调用 aeMain 函数，
+    // 而 aeMain 函数循环执行 aeProceeEvent 函数，来捕获和处理客户端请求触发的事件。
+    //对于 aeCreateFileEvent 函数来说，实际上它内部是通过 aeApiAddEvent 函数来完成事件注册的。
     if (aeCreateFileEvent(server.el, server.module_blocked_pipe[0], AE_READABLE,
         moduleBlockedClientPipeReadable,NULL) == AE_ERR) {
             serverPanic(
@@ -3322,6 +3349,8 @@ void initServer(void) {
 
     /* Register before and after sleep handlers (note this needs to be done
      * before loading persistence since it is used by processEventsWhileBlocked. */
+    //在进入事件驱动循环前，main 函数会分别调用 aeSetBeforeSleepProc 和 aeSetAfterSleepProc 两个函数，
+    //来设置每次进入事件循环前 server 需要执行的操作，以及每次事件循环结束后 server 需要执行的操作。
     aeSetBeforeSleepProc(server.el,beforeSleep);
     aeSetAfterSleepProc(server.el,afterSleep);
 
@@ -3363,6 +3392,7 @@ void initServer(void) {
  * see: https://sourceware.org/bugzilla/show_bug.cgi?id=19329 */
 void InitServerLast() {
     bioInit();
+    //6.x版本相对5.x版本多了下面initThreadIO()函数，而此函数就是用来初始化多IO线程的。
     initThreadedIO();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
@@ -3957,12 +3987,14 @@ int processCommand(client *c) {
         serverAssert(!server.in_eval);
     }
 
+    //第一步，processCommand 函数会调用 moduleCallCommandFilters 函数（在module.c文件），将 Redis 命令替换成 module 中想要替换的命令。
     moduleCallCommandFilters(c);
 
     /* The QUIT command is handled separately. Normal command procs will
      * go through checking for replication and QUIT will cause trouble
      * when FORCE_REPLICATION is enabled and would be implemented in
      * a regular command proc. */
+    //第二步，processCommand 函数会判断当前命令是否为 quit 命令，并进行相应处理。
     if (!strcasecmp(c->argv[0]->ptr,"quit")) {
         addReply(c,shared.ok);
         c->flags |= CLIENT_CLOSE_AFTER_REPLY;
@@ -3971,7 +4003,9 @@ int processCommand(client *c) {
 
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. */
+    //第三步，processCommand 函数会调用 lookupCommand 函数，在全局变量 server 的 commands 成员变量中查找相关的命令。
     c->cmd = c->lastcmd = lookupCommand(c->argv[0]->ptr);
+    //一旦查到对应命令后，processCommand 函数就会进行多种检查，比如命令的参数是否有效、发送命令的用户是否进行过验证、当前内存的使用情况，等等。
     if (!c->cmd) {
         sds args = sdsempty();
         int i;
@@ -4231,15 +4265,20 @@ int processCommand(client *c) {
     }
 
     /* Exec the command */
+    /*
+     * 等到 processCommand 函数对命令做完各种检查后，它就开始执行命令了。它会判断当前客户端是否有 CLIENT_MULTI 标记，如果有的话，就表明要处理的是 Redis 事务的相关命令，所以它会按照事务的要求，调用 queueMultiCommand 函数将命令入队保存，等待后续一起处理。
+     * 而如果没有，processCommand 函数就会调用 call 函数来实际执行命令了。
+     */
+    //如果客户端有CLIENT_MULTI标记，并且当前不是exec、discard、multi和watch命令
     if (c->flags & CLIENT_MULTI &&
         c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != multiCommand && c->cmd->proc != watchCommand &&
         c->cmd->proc != resetCommand)
     {
-        queueMultiCommand(c);
+        queueMultiCommand(c);//将命令入队保存，等待后续一起处理
         addReply(c,shared.queued);
     } else {
-        call(c,CMD_CALL_FULL);
+        call(c,CMD_CALL_FULL);//调用call函数执行命令。call 函数是在 server.c 文件中实现的，它执行命令是通过调用命令本身，即 redisCommand 结构体中定义的函数指针来完成的。
         c->woff = server.master_repl_offset;
         if (listLength(server.ready_keys))
             handleClientsBlockedOnKeys();
@@ -5560,12 +5599,16 @@ void createPidFile(void) {
 void daemonize(void) {
     int fd;
 
+    //fork返回值小于0时，表示fork函数执行有误；返回值等于0时，返回值对应的代码分支就会在子进程中运行；返回值大于0时，返回值对应的代码分支仍然会在父进程中运行。
+    //fork成功执行（但代码分支仍在父进程中运行）或失败，则父进程退出
     if (fork() != 0) exit(0); /* parent exits */
     setsid(); /* create a new session */
 
     /* Every output goes to /dev/null. If Redis is daemonized but
      * the 'logfile' is set to 'stdout' in the configuration file
      * it will not log at all. */
+    //将子进程的标准输入、标准输出、标准错误输出重定向到/dev/null中
+    //因为守护进程是在后台运行，它的输入输出是独立于 shell 终端的。所以，为了让 Redis 能以守护进程方式运行，这几步操作的目的就是把当前子进程的输入、输出由原来的 shell 终端，转向 /dev/null 设备，这样一来，就不再依赖于 shell 终端了，满足了守护进程的要求。
     if ((fd = open("/dev/null", O_RDWR, 0)) != -1) {
         dup2(fd, STDIN_FILENO);
         dup2(fd, STDOUT_FILENO);
@@ -5920,6 +5963,7 @@ int checkForSentinelMode(int argc, char **argv) {
 /* Function called at startup to load RDB or AOF file in memory. */
 void loadDataFromDisk(void) {
     long long start = ustime();
+    //可以从 loadDataFromDisk 函数中看到，Redis server 会先读取 AOF；而如果没有 AOF，则再读取 RDB。
     if (server.aof_state == AOF_ON) {
         if (loadAppendOnlyFile(server.aof_filename) == C_OK)
             serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
@@ -6152,7 +6196,7 @@ int main(int argc, char **argv) {
     struct timeval tv;
     int j;
     char config_from_stdin = 0;
-
+//是否执行测试代码判断
 #ifdef REDIS_TEST
     if (argc >= 3 && !strcasecmp(argv[1], "test")) {
         int accurate = 0;
@@ -6197,6 +6241,8 @@ int main(int argc, char **argv) {
 #ifdef INIT_SETPROCTITLE_REPLACEMENT
     spt_init(argc, argv);
 #endif
+    //阶段一
+    //设置时区
     setlocale(LC_COLLATE,"");
     tzset(); /* Populates 'timezone' global. */
     zmalloc_set_oom_handler(redisOutOfMemoryHandler);
@@ -6212,10 +6258,13 @@ int main(int argc, char **argv) {
      */
     umask(server.umask = umask(0777));
 
+    //设置随机种子
     uint8_t hashseed[16];
     getRandomBytes(hashseed,sizeof(hashseed));
     dictSetHashFunctionSeed(hashseed);
+    //阶段二：检测是否为哨兵模式并对变量赋值（以及后续针对哨兵模式的一些操作，此版本和5.x版本有差异）
     server.sentinel_mode = checkForSentinelMode(argc,argv);
+    //阶段三：为各个参数初始化为默认值
     initServerConfig();
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
@@ -6232,6 +6281,7 @@ int main(int argc, char **argv) {
     /* We need to init sentinel right now as parsing the configuration file
      * in sentinel mode will have the effect of populating the sentinel
      * data structures with master nodes to monitor. */
+    //如果是哨兵模式则对哨兵相关配置进行初始化；同时还会检查是否要执行 RDB 检测或 AOF 检查
     if (server.sentinel_mode) {
         initSentinelConfig();
         initSentinel();
@@ -6275,6 +6325,7 @@ int main(int argc, char **argv) {
             server.exec_argv[1] = zstrdup(server.configfile);
             j = 2; // Skip this arg when parsing options
         }
+        //对redis启动时的命令参数进行逐一解析，会将去掉-的参数名和参数值保存成字符串
         while(j < argc) {
             /* Either first or last argument - Should we read config from stdin? */
             if (argv[j][0] == '-' && argv[j][1] == '\0' && (j == 1 || j == argc-1)) {
@@ -6297,11 +6348,14 @@ int main(int argc, char **argv) {
             j++;
         }
 
+        //进行第二和第三轮赋值
         loadServerConfig(server.configfile, config_from_stdin, options);
         if (server.sentinel_mode) loadSentinelConfigFromQueue();
         sdsfree(options);
     }
     if (server.sentinel_mode) sentinelCheckConfigFile();
+    //Redis 可以配置以守护进程的方式启动（配置文件 daemonize = yes），
+    //也可以把 Redis 托管给 upstart 或 systemd 来启动 / 停止（supervised = upstart|systemd|auto）。
     server.supervised = redisIsSupervised(server.supervised_mode);
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
@@ -6322,6 +6376,7 @@ int main(int argc, char **argv) {
     }
 
     readOOMScoreAdj();
+    //阶段四：初始化server
     initServer();
     if (background || server.pidfile) createPidFile();
     if (server.set_proc_title) redisSetProcTitle(NULL);
@@ -6353,6 +6408,7 @@ int main(int argc, char **argv) {
         moduleInitModulesSystemLast();
         moduleLoadFromQueue();
         ACLLoadUsersAtStartup();
+        //初始化 Server 完成后，Redis 还会启动 3 类后台线程（server.c 的 InitServerLast 函数），协助主线程工作（异步释放 fd、AOF 每秒刷盘、lazyfree）。
         InitServerLast();
         loadDataFromDisk();
         if (server.cluster_enabled) {
@@ -6393,6 +6449,7 @@ int main(int argc, char **argv) {
     redisSetCpuAffinity(server.server_cpulist);
     setOOMScoreAdj(-1);
 
+    //阶段五：运行事件驱动框架
     aeMain(server.el);
     aeDeleteEventLoop(server.el);
     return 0;

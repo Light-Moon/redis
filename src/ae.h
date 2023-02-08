@@ -96,17 +96,19 @@ typedef struct aeFiredEvent {
 } aeFiredEvent;
 
 /* State of an event based program */
+// 此结构体记录了事件框架循环运行过程中的信息。因为 Redis server 在完成初始化后，就要开始运行事件驱动框架的循环流程，
+// 所以，aeEventLoop 结构体在server.c的 initServer 函数中，就通过调用 aeCreateEventLoop 函数进行初始化了。
 typedef struct aeEventLoop {
     int maxfd;   /* highest file descriptor currently registered */
     int setsize; /* max number of file descriptors tracked */
     long long timeEventNextId;
-    aeFileEvent *events; /* Registered events */
-    aeFiredEvent *fired; /* Fired events */
-    aeTimeEvent *timeEventHead;
+    aeFileEvent *events; /* Registered events */  //IO事件数组，之所以这样命名是因为所有的IO事件都会用文件描述符进行标识
+    aeFiredEvent *fired; /* Fired events */ //已触发事件数组
+    aeTimeEvent *timeEventHead; //记录事件事件的链表头。时间事件即按一定时间周期触发的事件
     int stop;
-    void *apidata; /* This is used for polling API specific data */
-    aeBeforeSleepProc *beforesleep;
-    aeBeforeSleepProc *aftersleep;
+    void *apidata; /* This is used for polling API specific data */ //和API调用接口相关的数据
+    aeBeforeSleepProc *beforesleep; //进入事件循环流程前执行的函数
+    aeBeforeSleepProc *aftersleep; //退出事件循环流程后执行的函数
     int flags;
 } aeEventLoop;
 

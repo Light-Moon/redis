@@ -119,6 +119,7 @@ client *createClient(connection *conn) {
         connEnableTcpNoDelay(conn);
         if (server.tcpkeepalive)
             connKeepAlive(conn,server.tcpkeepalive);
+        //监听读事件，一旦客户端有请求发送到 server，框架就会回调 readQueryFromClient 函数处理请求。
         connSetReadHandler(conn, readQueryFromClient);
         connSetPrivateData(conn, c);
     }
@@ -1111,6 +1112,13 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     }
 }
 
+/*
+ * Error。5.x版本为下述流程，6.x版本不是了。
+ * 它会接受客户端连接，并创建已连接套接字 cfd。然后，acceptCommonHandler 函数会被调用，同时，刚刚创建的已连接套接字 cfd 会作为参数，传递给 acceptCommonHandler 函数。
+ * acceptCommonHandler 函数会调用 createClient 函数创建客户端。而在 createClient 函数中，我们就会看到，aeCreateFileEvent 函数被再次调用了。
+ * 此时，aeCreateFileEvent 函数会针对已连接套接字上，创建监听事件，类型为 AE_READABLE，回调函数是 readQueryFromClient（在 networking.c 文件中）。
+ * 好了，到这里，事件驱动框架就增加了对一个客户端已连接套接字的监听。一旦客户端有请求发送到 server，框架就会回调 readQueryFromClient 函数处理请求。这样一来，客户端请求就能通过事件驱动框架进行处理了。
+ */
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd, max = MAX_ACCEPTS_PER_CALL;
     char cip[NET_IP_STR_LEN];
@@ -2015,6 +2023,7 @@ int processCommandAndResetClient(client *c) {
     int deadclient = 0;
     client *old_client = server.current_client;
     server.current_client = c;
+    //一条命令执行的第四个阶段：命令执行阶段
     if (processCommand(c) == C_OK) {
         commandProcessed(c);
     }
@@ -2051,6 +2060,7 @@ int processPendingCommandsAndResetClient(client *c) {
  * more query buffer to process, because we read more data from the socket
  * or because a client was blocked and later reactivated, so there could be
  * pending query buffer, already representing a full command, to process. */
+//一条命令处理的第二个阶段：对客户端输入缓冲区中的命令和参数进行解析。
 void processInputBuffer(client *c) {
     /* Keep processing while there is something in the input buffer */
     while(c->qb_pos < sdslen(c->querybuf)) {
@@ -2076,10 +2086,18 @@ void processInputBuffer(client *c) {
 
         /* Determine request type when unknown. */
         if (!c->reqtype) {
+            /*
+             * 如果命令是以“*”开头，那就表明这个命令是 PROTO_REQ_MULTIBULK 类型的命令请求，也就是符合 RESP 协议（Redis 客户端与服务器端的标准通信协议）的请求。
+             * 那么，processInputBuffer 函数就会进一步调用 processMultibulkBuffer（在 networking.c 文件中）函数，来解析读取到的命令。
+             */
             if (c->querybuf[c->qb_pos] == '*') {
-                c->reqtype = PROTO_REQ_MULTIBULK;
+                c->reqtype = PROTO_REQ_MULTIBULK;//符合RESP协议的命令
             } else {
-                c->reqtype = PROTO_REQ_INLINE;
+                /*
+                 * 而如果命令不是以“*”开头，那则表明这个命令是 PROTO_REQ_INLINE 类型的命令请求，并不是 RESP 协议请求。这类命令也被称为管道命令，命令和命令之间是使用换行符“\r\n”分隔开来的。比如，我们使用 Telnet 发送给 Redis 的命令，就是属于 PROTO_REQ_INLINE 类型的命令。
+                 * 在这种情况下，processInputBuffer 函数会调用 processInlineBuffer（在 networking.c 文件中）函数，来实际解析命令。
+                 */
+                c->reqtype = PROTO_REQ_INLINE;//管道类型命令
             }
         }
 
@@ -2116,6 +2134,9 @@ void processInputBuffer(client *c) {
             }
 
             /* We are finally ready to execute the command. */
+            /*
+             * 等命令解析完成后，processInputBuffer 函数就会调用 processCommand 函数，开始进入命令处理的第三个阶段，也就是命令执行阶段。
+             */
             if (processCommandAndResetClient(c) == C_ERR) {
                 /* If the client is no longer valid, we avoid exiting this
                  * loop and trimming the client buffer later. So we return
@@ -2132,6 +2153,8 @@ void processInputBuffer(client *c) {
     }
 }
 
+//此函数对应一条命令处理过程中的第一步：命令读取
+//readQueryFromClient 函数会从客户端连接的 socket 中，读取最大为 readlen 长度的数据，readlen 值大小是宏定义 PROTO_IOBUF_LEN。该宏定义是在server.h文件中定义的，默认值为 16KB。
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
     int nread, readlen;
@@ -2144,7 +2167,7 @@ void readQueryFromClient(connection *conn) {
     /* Update total number of reads on server */
     atomicIncr(server.stat_total_reads_processed, 1);
 
-    readlen = PROTO_IOBUF_LEN;
+    readlen = PROTO_IOBUF_LEN; //从客户端socket中读取的数据长度，默认为16KB
     /* If this is a multi bulk request, and we are processing a bulk reply
      * that is large enough, try to maximize the probability that the query
      * buffer contains exactly the SDS string representing the object, even
@@ -2163,8 +2186,9 @@ void readQueryFromClient(connection *conn) {
 
     qblen = sdslen(c->querybuf);
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
-    c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
-    nread = connRead(c->conn, c->querybuf+qblen, readlen);
+    c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);//给缓冲区分配空间
+    nread = connRead(c->conn, c->querybuf+qblen, readlen);//调用read从描述符为fd的客户端socket中读取数据（fd应该三从conn中获取）
+    //是否读取了异常数据，比如数据读取失败或客户端连接关闭等
     if (nread == -1) {
         if (connGetState(conn) == CONN_STATE_CONNECTED) {
             return;
@@ -2181,6 +2205,7 @@ void readQueryFromClient(connection *conn) {
         /* Append the query buffer to the pending (not applied) buffer
          * of the master. We'll use this buffer later in order to have a
          * copy of the string applied by the last command executed. */
+        //如果当前客户端是主从复制中的主节点，readQueryFromClient 函数还会把读取的数据，追加到用于主从节点命令同步的缓冲区中。
         c->pending_querybuf = sdscatlen(c->pending_querybuf,
                                         c->querybuf+qblen,nread);
     }
@@ -2202,6 +2227,7 @@ void readQueryFromClient(connection *conn) {
 
     /* There is more data in the client input buffer, continue parsing it
      * in case to check if there is a full command to execute. */
+    //开始写事件处理
      processInputBuffer(c);
 }
 
@@ -3418,15 +3444,15 @@ void processEventsWhileBlocked(void) {
 #define IO_THREADS_OP_READ 0
 #define IO_THREADS_OP_WRITE 1
 
-pthread_t io_threads[IO_THREADS_MAX_NUM];
-pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM];
-redisAtomic unsigned long io_threads_pending[IO_THREADS_MAX_NUM];
+pthread_t io_threads[IO_THREADS_MAX_NUM]; //记录线程描述符的数组
+pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM]; //记录线程互斥锁的数组
+redisAtomic unsigned long io_threads_pending[IO_THREADS_MAX_NUM]; //记录线程待处理的客户端个数
 int io_threads_op;      /* IO_THREADS_OP_WRITE or IO_THREADS_OP_READ. */
 
 /* This is the list of clients each thread will serve when threaded I/O is
  * used. We spawn io_threads_num-1 threads, since one is the main thread
  * itself. */
-list *io_threads_list[IO_THREADS_MAX_NUM];
+list *io_threads_list[IO_THREADS_MAX_NUM]; //记录线程对应处理的客户端
 
 static inline unsigned long getIOPendingCount(int i) {
     unsigned long count = 0;
@@ -3438,6 +3464,7 @@ static inline void setIOPendingCount(int i, unsigned long count) {
     atomicSetWithSync(io_threads_pending[i], count);
 }
 
+//IO 线程的运行函数 IOThreadMain
 void *IOThreadMain(void *myid) {
     /* The ID is the thread number (from 0 to server.iothreads_num-1), and is
      * used by the thread to just manipulate a single sub-array of clients. */
@@ -3449,6 +3476,7 @@ void *IOThreadMain(void *myid) {
     redisSetCpuAffinity(server.server_cpulist);
     makeThreadKillable();
 
+    //在这个循环中，IOThreadMain 函数会把 io_threads_list 数组中，每个 IO 线程对应的列表读取出来。
     while(1) {
         /* Wait for start */
         for (int j = 0; j < 1000000; j++) {
@@ -3468,30 +3496,41 @@ void *IOThreadMain(void *myid) {
          * before we drop the pending count to 0. */
         listIter li;
         listNode *ln;
+        //获取IO线程要处理的客户端列表
         listRewind(io_threads_list[id],&li);
         while((ln = listNext(&li))) {
-            client *c = listNodeValue(ln);
-            if (io_threads_op == IO_THREADS_OP_WRITE) {
+            client *c = listNodeValue(ln);//从客户端列表中获取一个客户端
+            if (io_threads_op == IO_THREADS_OP_WRITE) { //如果线程操作是写操作，则调用writeToClient将数据写回客户端
                 writeToClient(c,0);
-            } else if (io_threads_op == IO_THREADS_OP_READ) {
+            } else if (io_threads_op == IO_THREADS_OP_READ) { //如果线程操作是读操作，则调用readQueryFromClient从客户端读取数据
                 readQueryFromClient(c->conn);
             } else {
                 serverPanic("io_threads_op value is unknown");
             }
         }
-        listEmpty(io_threads_list[id]);
-        setIOPendingCount(id, 0);
+        listEmpty(io_threads_list[id]);//处理完所有客户端后，清空该线程的客户端列表
+        setIOPendingCount(id, 0);//将该线程的待处理任务数量设置为0
     }
 }
 
 /* Initialize the data structures needed for threaded I/O. */
 void initThreadedIO(void) {
+    /*
+     * 首先，initThreadedIO 函数会设置 IO 线程的激活标志。这个激活标志保存在 redisServer 结构体类型的全局变量 server 当中，
+     * 对应 redisServer 结构体的成员变量 io_threads_active。initThreadedIO 函数会把 io_threads_active 初始化为 0，表示 IO 线程还没有被激活。
+     * 说明：上面提到的全局变量 server 是 Redis server 运行时，用来保存各种全局信息的结构体变量。在main初始化处理的时候给其已经赋值了的。
+     */
     server.io_threads_active = 0; /* We start with threads not active. */
 
     /* Don't spawn any thread if the user selected a single thread:
      * we'll handle I/O directly from the main thread. */
+    /*
+     * 其次，函数会对设置的IO线程数量进行判断，这个数量就是保存在全局变量 server 的成员变量 io_threads_num 中的。
+     * 如果IO数量为1，就表示只有1个主IO线程，函数就直接返回了。此时，redis server的IO线程和redis6.0之前的版本相同。
+     */
     if (server.io_threads_num == 1) return;
 
+    //若IO线程数量大于宏定义128，则函数报错并退出整个程序。
     if (server.io_threads_num > IO_THREADS_MAX_NUM) {
         serverLog(LL_WARNING,"Fatal: too many I/O threads configured. "
                              "The maximum number is %d.", IO_THREADS_MAX_NUM);
@@ -3501,19 +3540,26 @@ void initThreadedIO(void) {
     /* Spawn and initialize the I/O threads. */
     for (int i = 0; i < server.io_threads_num; i++) {
         /* Things we do for all the threads including the main thread. */
+        /*
+         * io_threads_list 数组：保存了每个 IO 线程要处理的客户端，将数组每个元素初始化为一个 List 类型的列表；
+         * （io_threads_pending 数组：保存等待每个 IO 线程处理的客户端个数；i）
+         * o_threads_mutex 数组：保存线程互斥锁；
+         * io_threads 数组：保存每个 IO 线程的描述符。
+         */
         io_threads_list[i] = listCreate();
-        if (i == 0) continue; /* Thread 0 is the main thread. */
+        if (i == 0) continue; /* Thread 0 is the main thread. */ //编号为0的线程是主IO线程
 
         /* Things we do only for the additional threads. */
         pthread_t tid;
-        pthread_mutex_init(&io_threads_mutex[i],NULL);
+        pthread_mutex_init(&io_threads_mutex[i],NULL);//初始化io_threads_mutex数组
         setIOPendingCount(i, 0);
         pthread_mutex_lock(&io_threads_mutex[i]); /* Thread will be stopped. */
+        //调用pthread_create函数创建IO线程，线程运行函数为IOThreadMain
         if (pthread_create(&tid,NULL,IOThreadMain,(void*)(long)i) != 0) {
             serverLog(LL_WARNING,"Fatal: Can't initialize IO thread.");
             exit(1);
         }
-        io_threads[i] = tid;
+        io_threads[i] = tid;//初始化io_threads数组，设置值为线程标识
     }
 }
 
@@ -3534,6 +3580,13 @@ void killIOThreads(void) {
     }
 }
 
+/*
+ * 为什么 startThreadedIO / stopThreadedIO 要执行加解锁？
+ * 分析：既然涉及到加锁操作，必然是为了「互斥」从而控制某些逻辑。可以在代码中检索这个锁变量，看存在哪些逻辑对 io_threads_mutex 操作了加解锁。跟踪代码可以看到，在 networking.c 的 IOThreadMain 函数，
+ * 也对这个变量进行了加解锁操作，那就说明 startThreadedIO / stopThreadedIO 函数，可以控制 IOThreadMain 里逻辑的执行，从IOThreadMain函数的注释可以指导，是为了给主线程停止IO线程的机会。也即目的三为了让主线程可以控制IO线程的开启或暂停。
+ * 因为每次 IO 线程在执行时必须先拿到锁，才能执行后面的逻辑，如果主线程执行了 stopThreadedIO，就会先拿到锁，那么 IOThreadMain 函数在执行时就会因为拿不到锁阻塞「等待」，这就达到了 stop IO 线程的目的。
+ * 同样地，调用 startThreadedIO 函数后，会释放锁，IO 线程就可以拿到锁，继续「恢复」执行。
+ */
 void startThreadedIO(void) {
     serverAssert(server.io_threads_active == 0);
     for (int j = 1; j < server.io_threads_num; j++)

@@ -60,9 +60,11 @@
 
 #include "server.h"
 #include "bio.h"
-
+//保存线程描述符的数组
 static pthread_t bio_threads[BIO_NUM_OPS];
+//保存互斥锁的数组
 static pthread_mutex_t bio_mutex[BIO_NUM_OPS];
+//保存条件变量的两个数组
 static pthread_cond_t bio_newjob_cond[BIO_NUM_OPS];
 static pthread_cond_t bio_step_cond[BIO_NUM_OPS];
 static list *bio_jobs[BIO_NUM_OPS];
@@ -77,11 +79,11 @@ static unsigned long long bio_pending[BIO_NUM_OPS];
 /* This structure represents a background Job. It is only used locally to this
  * file as the API does not expose the internals at all. */
 struct bio_job {
-    time_t time; /* Time at which the job was created. */
+    time_t time; /* Time at which the job was created. */ //任务创建时间
     /* Job specific arguments.*/
     int fd; /* Fd for file based background jobs */
     lazy_free_fn *free_fn; /* Function that will free the provided arguments */
-    void *free_args[]; /* List of arguments to be passed to the free function */
+    void *free_args[]; /* List of arguments to be passed to the free function */ //任务参数
 };
 
 void *bioProcessBackgroundJobs(void *arg);
@@ -98,6 +100,11 @@ void bioInit(void) {
     int j;
 
     /* Initialization of state vars and objects */
+    /*
+     * bioInit 函数首先会初始化互斥锁数组和条件变量数组。然后，该函数会调用 listCreate 函数，给 bio_jobs 这个数组的每个元素创建一个列表，同时给 bio_pending 数组的每个元素赋值为 0。
+     * bio_jobs 数组的元素是 bio_jobs 结构体类型，用来表示后台任务。该结构体的成员变量包括了后台任务的创建时间 time，以及任务的参数。为该数组的每个元素创建一个列表，其实就是为每个后台线程创建一个要处理的任务列表。
+     * bio_pending 数组的元素类型是 unsigned long long，用来表示每种任务中，处于等待状态的任务个数。将该数组每个元素初始化为 0，其实就是表示初始时，每种任务都没有待处理的具体任务。
+     */
     for (j = 0; j < BIO_NUM_OPS; j++) {
         pthread_mutex_init(&bio_mutex[j],NULL);
         pthread_cond_init(&bio_newjob_cond[j],NULL);
@@ -107,8 +114,12 @@ void bioInit(void) {
     }
 
     /* Set the stack size as by default it may be small in some system */
+    /*
+     * 首先，bioInit 函数会调用 pthread_attr_init 函数，初始化线程属性变量 attr，然后调用 pthread_attr_getstacksize 函数，获取线程的栈大小这一属性的当前值，并根据当前栈大小和 REDIS_THREAD_STACK_SIZE 宏定义的大小（默认值为 4MB），
+     * 来计算最终的栈大小属性值。紧接着，bioInit 函数会调用 pthread_attr_setstacksize 函数，来设置栈大小这一属性值。
+     */
     pthread_attr_init(&attr);
-    pthread_attr_getstacksize(&attr,&stacksize);
+    pthread_attr_getstacksize(&attr,&stacksize); // 针对Solaris系统做处理
     if (!stacksize) stacksize = 1; /* The world is full of Solaris Fixes */
     while (stacksize < REDIS_THREAD_STACK_SIZE) stacksize *= 2;
     pthread_attr_setstacksize(&attr, stacksize);
@@ -118,6 +129,16 @@ void bioInit(void) {
      * responsible of. */
     for (j = 0; j < BIO_NUM_OPS; j++) {
         void *arg = (void*)(unsigned long) j;
+        /*
+         * pthread_create 函数一共有 4 个参数，分别是：
+         * *tidp，指向线程数据结构 pthread_t 的指针；
+         * *attr，指向线程属性结构 pthread_attr_t 的指针；
+         * *start_routine，线程所要运行的函数的起始地址，也是指向函数的指针；
+         * *arg，传给运行函数的参数。
+         *
+         * 在完成线程属性的设置后，接下来，bioInit 函数会通过一个 for 循环，来依次为每种后台任务创建一个线程。循环的次数是由 BIO_NUM_OPS 宏定义决定的，也就是 3 次。
+         * 相应的，bioInit 函数就会调用 3 次 pthread_create 函数，并创建 3 个线程。bioInit 函数让这 3 个线程执行的函数都是 bioProcessBackgroundJobs。
+         */
         if (pthread_create(&thread,&attr,bioProcessBackgroundJobs,arg) != 0) {
             serverLog(LL_WARNING,"Fatal: Can't initialize Background Jobs.");
             exit(1);
@@ -126,10 +147,14 @@ void bioInit(void) {
     }
 }
 
+//后台任务创建函数  之前5.x版本是叫bioCreateBackgroundJob函数
 void bioSubmitJob(int type, struct bio_job *job) {
+    //设置任务数据结构中的参数
     job->time = time(NULL);
     pthread_mutex_lock(&bio_mutex[type]);
+    //将任务加到bio_jobs数组的对应任务列表中
     listAddNodeTail(bio_jobs[type],job);
+    //将对应任务列表上等待处理的任务个数加1
     bio_pending[type]++;
     pthread_cond_signal(&bio_newjob_cond[type]);
     pthread_mutex_unlock(&bio_mutex[type]);
@@ -164,8 +189,10 @@ void bioCreateFsyncJob(int fd) {
     bioSubmitJob(BIO_AOF_FSYNC, job);
 }
 
+//处理后台任务
 void *bioProcessBackgroundJobs(void *arg) {
     struct bio_job *job;
+    //type 变量表示的就是后台任务的操作码。也就是三种后台任务类型 BIO_CLOSE_FILE、BIO_AOF_FSYNC 和 BIO_LAZY_FREE 对应的操作码，它们的取值分别为 0、1、2。
     unsigned long type = (unsigned long) arg;
     sigset_t sigset;
 
@@ -201,6 +228,11 @@ void *bioProcessBackgroundJobs(void *arg) {
         serverLog(LL_WARNING,
             "Warning: can't mask SIGALRM in bio.c thread: %s", strerror(errno));
 
+    /*
+     * bioProcessBackgroundJobs 函数的主要执行逻辑是一个 while(1) 的循环。在这个循环中，bioProcessBackgroundJobs 函数会从 bio_jobs 这个数组中取出相应任务，并根据任务类型，调用具体的函数来执行。
+     * bio_jobs 数组的每一个元素是一个队列。而因为 bio_jobs 数组的元素个数，等于后台任务的类型个数（也就是 BIO_NUM_OPS），所以，bio_jobs 数组的每个元素，实际上是对应了某一种后台任务的任务队列。
+     * 因为传给 bioProcessBackgroundJobs 函数的参数，分别是 0、1、2，对应了三种任务类型，所以在这个循环中，bioProcessBackgroundJobs 函数会一直不停地从某一种任务队列中，取出一个任务来执行。
+     */
     while(1) {
         listNode *ln;
 
@@ -223,7 +255,7 @@ void *bioProcessBackgroundJobs(void *arg) {
             /* The fd may be closed by main thread and reused for another
              * socket, pipe, or file. We just ignore these errno because
              * aof fsync did not really fail. */
-            if (redis_fsync(job->fd) == -1 &&
+            if (redis_fsync(job->fd) == -1 &&  //如果是AOF同步写任务，那就调用redis_fsync函数
                 errno != EBADF && errno != EINVAL)
             {
                 int last_status;

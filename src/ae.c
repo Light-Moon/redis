@@ -48,32 +48,48 @@
 
 /* Include the best multiplexing layer supported by this system.
  * The following should be ordered by performances, descending. */
+// 实际上，Redis 是依赖于操作系统底层提供的 IO 多路复用机制，来实现事件捕获，检查是否有新的连接、读写事件发生。
+// 为了适配不同的操作系统，Redis 对不同操作系统实现的网络 IO 多路复用函数，都进行了统一的封装，封装后的代码分别通过以下四个文件中实现：
+// ae_epoll.c，对应 Linux 上的 IO 复用函数 epoll；
+// ae_evport.c，对应 Solaris 上的 IO 复用函数 evport；
+// ae_kqueue.c，对应 macOS 或 FreeBSD 上的 IO 复用函数 kqueue；
+// ae_select.c，对应 Linux（或 Windows）的 IO 复用函数 select。
+// linu系统支持select poll和epoll三种IO多路复用机制。
 #ifdef HAVE_EVPORT
-#include "ae_evport.c"
+#include "ae_evport.c"  // 对应Solaris
 #else
     #ifdef HAVE_EPOLL
-    #include "ae_epoll.c"
+    #include "ae_epoll.c"  // 对应Linux
     #else
         #ifdef HAVE_KQUEUE
-        #include "ae_kqueue.c"
+        #include "ae_kqueue.c" // 对应MacOS或FreeBSD
         #else
-        #include "ae_select.c"
+        #include "ae_select.c"  // 对应Linux或Windows
         #endif
     #endif
 #endif
+// 在 Redis 事件驱动框架代码中，分别使用了 Linux 系统上的 select 和 epoll 两种机制，为什么 Redis 没有使用 poll 这一机制呢？
+// 个人理解：select 并不是为 Linux 服务的，而是在 Windows 下使用的。因为 epoll 性能优于 select 和 poll，所以 Linux 平台下，Redis 直接会选择 epoll。而 Windows 不支持 epoll 和 poll，所以会用 select 模型。
 
 
 aeEventLoop *aeCreateEventLoop(int setsize) {
+    /*
+     * 第一步：
+     * 首先会创建一个 aeEventLoop 结构体类型的变量 eventLoop。然后，该函数会给 eventLoop 的成员变量分配内存空间，
+     * 比如，按照传入的参数 setsize，给 IO 事件数组和已触发事件数组分配相应的内存空间。此外，该函数还会给 eventLoop 的成员变量赋初始值。
+     */
     aeEventLoop *eventLoop;
     int i;
 
     monotonicInit();    /* just in case the calling app didn't initialize */
-
+    //给eventLoop变量分配内存空间
     if ((eventLoop = zmalloc(sizeof(*eventLoop))) == NULL) goto err;
+    //给IO事件、已触发事件分配内存空间
     eventLoop->events = zmalloc(sizeof(aeFileEvent)*setsize);
     eventLoop->fired = zmalloc(sizeof(aeFiredEvent)*setsize);
     if (eventLoop->events == NULL || eventLoop->fired == NULL) goto err;
     eventLoop->setsize = setsize;
+    //设置时间事件的链表头为NULL
     eventLoop->timeEventHead = NULL;
     eventLoop->timeEventNextId = 0;
     eventLoop->stop = 0;
@@ -81,13 +97,22 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->beforesleep = NULL;
     eventLoop->aftersleep = NULL;
     eventLoop->flags = 0;
+
+    /*
+     * 第二步：会调用aeApiCreate函数（去实际调用操作系统提供的IO多路复用函数）。aeApiCreate 函数封装了操作系统提供的 IO 多路复用函数，假设 Redis 运行在 Linux 操作系统上，并且 IO 多路复用机制是 epoll，
+     * 那么此时，aeApiCreate 函数就会调用 epoll_create 创建 epoll 实例，同时会创建 epoll_event 结构的数组，数组大小等于参数 setsize。
+     */
     if (aeApiCreate(eventLoop) == -1) goto err;
     /* Events with mask == AE_NONE are not set. So let's initialize the
      * vector with it. */
+    /*
+     * 第三步：aeCreateEventLoop 函数会把所有网络 IO 事件对应文件描述符的掩码，初始化为 AE_NONE，表示暂时不对任何事件进行监听。
+     */
     for (i = 0; i < setsize; i++)
         eventLoop->events[i].mask = AE_NONE;
     return eventLoop;
 
+    //初始化失败后的处理逻辑
 err:
     if (eventLoop) {
         zfree(eventLoop->events);
@@ -163,6 +188,7 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
     }
     aeFileEvent *fe = &eventLoop->events[fd];
 
+    //实际是通过这里的aeApiAddEvent函数来完成事件注册的。
     if (aeApiAddEvent(eventLoop, fd, mask) == -1)
         return AE_ERR;
     fe->mask |= mask;
@@ -269,7 +295,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
     aeTimeEvent *te;
     long long maxId;
 
-    te = eventLoop->timeEventHead;
+    te = eventLoop->timeEventHead;//从时间事件连表中取出事件
     maxId = eventLoop->timeEventNextId-1;
     monotime now = getMonotonicUs();
     while(te) {
@@ -315,7 +341,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
 
             id = te->id;
             te->refcount++;
-            retval = te->timeProc(eventLoop, id, te->clientData);
+            retval = te->timeProc(eventLoop, id, te->clientData);//调用注册的回调函数处理
             te->refcount--;
             processed++;
             now = getMonotonicUs();
@@ -325,7 +351,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
                 te->id = AE_DELETED_EVENT_ID;
             }
         }
-        te = te->next;
+        te = te->next;//获取下一个时间事件
     }
     return processed;
 }
@@ -453,7 +479,9 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         }
     }
     /* Check time events */
+    //检测时间事件是否触发
     if (flags & AE_TIME_EVENTS)
+        //处理相应的到时任务
         processed += processTimeEvents(eventLoop);
 
     return processed; /* return the number of processed file/time events */
@@ -484,6 +512,7 @@ int aeWait(int fd, int mask, long long milliseconds) {
 void aeMain(aeEventLoop *eventLoop) {
     eventLoop->stop = 0;
     while (!eventLoop->stop) {
+        //循环调用aeProcessEvents函数来处理各种事件。
         aeProcessEvents(eventLoop, AE_ALL_EVENTS|
                                    AE_CALL_BEFORE_SLEEP|
                                    AE_CALL_AFTER_SLEEP);

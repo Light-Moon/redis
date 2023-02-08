@@ -670,14 +670,17 @@ typedef struct RedisModuleDigest {
 #define OBJ_SHARED_REFCOUNT INT_MAX     /* Global object never destroyed. */
 #define OBJ_STATIC_REFCOUNT (INT_MAX-1) /* Object allocated in the stack. */
 #define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
+//Redis 使用的基本数据对象结构体 redisObject,主要功能是用来保存键值对中的值，里面一共定义了4个元数据和1个指针。
+//变量后面加冒号和数值的定义方法，是C语言中的位域定义方法，可以用来有效地节省内存开销。
 typedef struct redisObject {
-    unsigned type:4;
-    unsigned encoding:4;
+    unsigned type:4;//type：redisObject 的数据类型，是应用程序在 Redis 中保存的数据类型，包括 String、List、Hash 等。，4个bits
+    unsigned encoding:4;//redisObject 的编码类型，是 Redis 内部实现各种数据类型所用的数据结构。，4个bits
+    //redisObject 的 LRU 时间，LRU_BITS为24个bits
     unsigned lru:LRU_BITS; /* LRU time (relative to global lru_clock) or
                             * LFU data (least significant 8 bits frequency
                             * and most significant 16 bits access time). */
-    int refcount;
-    void *ptr;
+    int refcount;//redisObject 的引用计数。4个字节
+    void *ptr;//指向值的指针，8个字节
 } robj;
 
 /* The a string name for an object's type as listed above
@@ -994,10 +997,15 @@ struct sharedObjectsStruct {
 };
 
 /* ZSETs use a specialized version of Skiplists */
+//跳表节点的结构定义
 typedef struct zskiplistNode {
+    //sorted set中的元素
     sds ele;
+    //元素权重值
     double score;
+    //后向指针
     struct zskiplistNode *backward;
+    //节点的level数组，保存每层上的前向指针和跨度
     struct zskiplistLevel {
         struct zskiplistNode *forward;
         unsigned long span;
@@ -1728,7 +1736,7 @@ typedef struct {
 /*-----------------------------------------------------------------------------
  * Extern declarations
  *----------------------------------------------------------------------------*/
-
+//server是一个全局变量，在redis server初始化过程中的各种参数初始化配置都是保存在这个全局变量server中的。阅读源码时，如果在某个函数中看到变量server，其实就是这个变量。
 extern struct redisServer server;
 extern struct sharedObjectsStruct shared;
 extern dictType objectKeyPointerValueDictType;

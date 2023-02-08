@@ -207,7 +207,7 @@ int dictTryExpand(dict *d, unsigned long size) {
 int dictRehash(dict *d, int n) {
     int empty_visits = n*10; /* Max number of empty buckets to visit. */
     if (!dictIsRehashing(d)) return 0;
-
+    //主循环，根据要拷贝的bucket数量n，循环n次后停止或ht[0]中的数据迁移完停止
     while(n-- && d->ht[0].used != 0) {
         dictEntry *de, *nextde;
 
@@ -218,18 +218,26 @@ int dictRehash(dict *d, int n) {
             d->rehashidx++;
             if (--empty_visits == 0) return 1;
         }
+        //获得哈希表中哈希项
         de = d->ht[0].table[d->rehashidx];
         /* Move all the keys in this bucket from the old to the new hash HT */
+        //如果rehashidx指向的bucket不为空
         while(de) {
             uint64_t h;
 
+            //获得同一个bucket中下一个哈希项
             nextde = de->next;
             /* Get the index in the new hash table */
+            //根据扩容后的哈希表ht[1]大小，计算当前哈希项在扩容后哈希表中的bucket位置
             h = dictHashKey(d, de->key) & d->ht[1].sizemask;
+            //将当前哈希项添加到扩容后的哈希表ht[1]中
             de->next = d->ht[1].table[h];
             d->ht[1].table[h] = de;
+            //减少当前哈希表的哈希项个数
             d->ht[0].used--;
+            //增加扩容后哈希表的哈希项个数
             d->ht[1].used++;
+            //指向下一个哈希项
             de = nextde;
         }
         d->ht[0].table[d->rehashidx] = NULL;
@@ -237,15 +245,21 @@ int dictRehash(dict *d, int n) {
     }
 
     /* Check if we already rehashed the whole table... */
+    //判断ht[0]的数据是否迁移完成
     if (d->ht[0].used == 0) {
+        //ht[0]迁移完后，释放ht[0]内存空间
         zfree(d->ht[0].table);
+        //让ht[0]指向ht[1]，以便接受正常的请求
         d->ht[0] = d->ht[1];
+        //重置ht[1]的大小为0
         _dictReset(&d->ht[1]);
+        //设置全局哈希表的rehashidx标识为-1，表示rehash结束
         d->rehashidx = -1;
         return 0;
     }
 
     /* More to rehash... */
+    //返回1，表示ht[0]中仍然有元素没有迁移完
     return 1;
 }
 
@@ -259,6 +273,12 @@ long long timeInMilliseconds(void) {
 /* Rehash in ms+"delta" milliseconds. The value of "delta" is larger 
  * than 0, and is smaller than 1 in most cases. The exact upper bound 
  * depends on the running time of dictRehash(d,100).*/
+/*
+ * 「全局哈希表」在触发渐进式 rehash 的情况有 2 个：（下面是情况1）
+ * 定时 rehash：如果 dict 一直没有操作，无法渐进式迁移数据，那主线程会默认每间隔 100ms 执行一次迁移操作。
+ * 这里一次会以 100 个桶为基本单位迁移数据，并限制如果一次操作耗时超时 1ms 就结束本次任务，待下次再次触发迁移。
+ * （注意：定时 rehash 只会迁移全局哈希表中的数据，不会定时迁移 Hash/Set/Sorted Set 下的哈希表的数据，这些哈希表只会在操作数据时做实时的渐进式 rehash）
+ */
 int dictRehashMilliseconds(dict *d, int ms) {
     if (d->pauserehash > 0) return 0;
 
@@ -280,7 +300,12 @@ int dictRehashMilliseconds(dict *d, int ms) {
  * This function is called by common lookup or update operations in the
  * dictionary so that the hash table automatically migrates from H1 to H2
  * while it is actively used. */
+/*
+ * 「全局哈希表」在触发渐进式 rehash 的情况有 2 个：（下面是情况2）
+ * 增删改查哈希表时：每次迁移 1 个哈希桶
+ */
 static void _dictRehashStep(dict *d) {
+    //给dictRehash传入的循环次数参数为1，表明每迁移完一个bucket ，就执行正常操作，也就是rehash时每次只对bucket进行操作
     if (d->pauserehash == 0) dictRehash(d,1);
 }
 
@@ -979,18 +1004,26 @@ static int dictTypeExpandAllowed(dict *d) {
 }
 
 /* Expand the hash table if needed */
+/*
+ * 三个扩容条件
+ * 条件一：ht[0]的大小为 0。
+ * 条件二：ht[0]承载的元素个数已经超过了 ht[0]的大小，同时 Hash 表可以进行扩容。
+ * 条件三：ht[0]承载的元素个数，是 ht[0]的大小的 dict_force_resize_ratio 倍，其中，dict_force_resize_ratio 的默认值是 5。
+ */
 static int _dictExpandIfNeeded(dict *d)
 {
     /* Incremental rehashing already in progress. Return. */
     if (dictIsRehashing(d)) return DICT_OK;
 
     /* If the hash table is empty expand it to the initial size. */
+    //条件一：ht[0]的大小为 0。如果Hash表为空，将Hash表扩为初始大小
     if (d->ht[0].size == 0) return dictExpand(d, DICT_HT_INITIAL_SIZE);
 
     /* If we reached the 1:1 ratio, and we are allowed to resize the hash
      * table (global setting) or we should avoid it but the ratio between
      * elements/buckets is over the "safe" threshold, we resize doubling
      * the number of buckets. */
+    //如果Hash表承载的元素个数超过其当前大小，并且可以进行扩容，或者Hash表承载的元素个数已是当前大小的5倍
     if (d->ht[0].used >= d->ht[0].size &&
         (dict_can_resize ||
          d->ht[0].used/d->ht[0].size > dict_force_resize_ratio) &&
@@ -1053,6 +1086,7 @@ void dictEmpty(dict *d, void(callback)(void*)) {
     d->pauserehash = 0;
 }
 
+//dict_can_resize变量值是在dictEnableResize 和 dictDisableResize 两个函数中设置的。启用和禁止哈希表执行 rehash 功能。他们又被封装在updateDictResizePolicy函数中。
 void dictEnableResize(void) {
     dict_can_resize = 1;
 }
