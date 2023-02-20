@@ -54,9 +54,16 @@ robj *createObject(int type, void *ptr) {
 
     /* Set the LRU to the current lruclock (minutes resolution), or
      * alternatively the LFU counter. */
+    //LRU 时钟值最初是在这个键值对被创建的时候，进行初始化设置的
+    /*
+     * 如果 maxmemory_policy 配置为使用 LFU 策略，那么 lru 变量值会被初始化设置为 LFU 算法的计算值。
+     * 而如果 maxmemory_policy 配置项没有使用 LFU 策略，那么，createObject 函数就会调用 LRU_CLOCK 函数来设置 lru 变量的值，也就是键值对对应的 LRU 时钟值。
+     */
+    //使用LFU算法时，lru变量包括以分钟为精度的UNIX时间戳和访问次数5
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
     } else {
+        //LRU_CLOCK 函数是在 evict.c 文件中实现的，它的作用就是返回当前的全局 LRU 时钟值。
         o->lru = LRU_CLOCK();
     }
     return o;

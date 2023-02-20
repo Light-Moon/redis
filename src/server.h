@@ -678,7 +678,7 @@ typedef struct redisObject {
     //redisObject 的 LRU 时间，LRU_BITS为24个bits
     unsigned lru:LRU_BITS; /* LRU time (relative to global lru_clock) or
                             * LFU data (least significant 8 bits frequency
-                            * and most significant 16 bits access time). */
+                            * and most significant 16 bits access time). */ //记录LRU信息，宏定义LRU_BITS是24 bits
     int refcount;//redisObject 的引用计数。4个字节
     void *ptr;//指向值的指针，8个字节
 } robj;
@@ -1188,7 +1188,7 @@ struct redisServer {
     dict *orig_commands;        /* Command table before command renaming. */
     aeEventLoop *el;
     rax *errors;                /* Errors table */
-    redisAtomic unsigned int lruclock; /* Clock for LRU eviction */
+    redisAtomic unsigned int lruclock; /* Clock for LRU eviction */ //全局 LRU 时钟保存在了 Redis 全局变量 server 的成员变量 lruclock 中
     volatile sig_atomic_t shutdown_asap; /* SHUTDOWN needed ASAP */
     int activerehashing;        /* Incremental rehash in serverCron() */
     int active_defrag_running;  /* Active defragmentation running (holds current scan aggressiveness) */

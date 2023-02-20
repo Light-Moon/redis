@@ -85,13 +85,17 @@ size_t lazyfreeGetFreedObjectsCount(void) {
  *
  * For lists the function returns the number of elements in the quicklist
  * representing the list. */
+/*
+ * 它对删除开销的评估逻辑很简单，就是根据要删除的键值对的类型，来计算删除开销。当键值对类型属于 List、Hash、Set 和 Sorted Set 这四种集合类型中的一种，
+ * 并且没有使用紧凑型内存结构来保存的话，那么，这个键值对的删除开销就等于集合中的元素个数。否则的话，删除开销就等于 1。
+ */
 size_t lazyfreeGetFreeEffort(robj *key, robj *obj) {
-    if (obj->type == OBJ_LIST) {
+    if (obj->type == OBJ_LIST) {//如果是List类型键值对，就返回List的长度，也就其中元素个数
         quicklist *ql = obj->ptr;
         return ql->len;
     } else if (obj->type == OBJ_SET && obj->encoding == OBJ_ENCODING_HT) {
         dict *ht = obj->ptr;
-        return dictSize(ht);
+        return dictSize(ht);//如果是Set类型键值对，就返回Set中的元素个数
     } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST){
         zset *zs = obj->ptr;
         return zs->zsl->length;
@@ -143,14 +147,17 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj) {
  * a lazy free list instead of being freed synchronously. The lazy free list
  * will be reclaimed in a different bio.c thread. */
 #define LAZYFREE_THRESHOLD 64
+//基于异步删除的数据淘汰
 int dbAsyncDelete(redisDb *db, robj *key) {
     /* Deleting an entry from the expires dict will not free the sds of
      * the key, because it is shared with the main dictionary. */
+    //调用 dictDelete 函数，在过期 key 的哈希表中同步删除被淘汰的键值对
     if (dictSize(db->expires) > 0) dictDelete(db->expires,key->ptr);
 
     /* If the value is composed of a few allocations, to free in a lazy way
      * is actually just slower... So under a certain limit we just free
      * the object synchronously. */
+    //调用 dictUnlink 函数，在全局哈希表中异步删除被淘汰的键值对
     dictEntry *de = dictUnlink(db->dict,key->ptr);
     if (de) {
         robj *val = dictGetVal(de);
@@ -158,6 +165,12 @@ int dbAsyncDelete(redisDb *db, robj *key) {
         /* Tells the module that the key has been unlinked from the database. */
         moduleNotifyKeyUnlink(key,val);
 
+        /*
+         * 而到这里，被淘汰的键值对只是在全局哈希表中被移除了，它占用的内存空间还没有实际释放。此时，dbAsyncDelete 函数会调用 lazyfreeGetFreeEffort 函数，来计算释放被淘汰键值对内存空间的开销。
+         * 如果开销较小，dbAsyncDelete 函数就直接在主 IO 线程中进行同步删除了。否则的话，dbAsyncDelete 函数会创建惰性删除任务，并交给后台线程来完成。
+         * lazyfreeGetFreeEffort 函数是在 lazyfree.c 文件中实现的，它对删除开销的评估逻辑很简单，就是根据要删除的键值对的类型，来计算删除开销。
+         * 当键值对类型属于 List、Hash、Set 和 Sorted Set 这四种集合类型中的一种，并且没有使用紧凑型内存结构来保存的话，那么，这个键值对的删除开销就等于集合中的元素个数。否则的话，删除开销就等于 1。
+         */
         size_t free_effort = lazyfreeGetFreeEffort(key,val);
 
         /* If releasing the object is too much work, do it in the background
@@ -168,10 +181,15 @@ int dbAsyncDelete(redisDb *db, robj *key) {
          * objects, and then call dbDelete(). In this case we'll fall
          * through and reach the dictFreeUnlinkedEntry() call, that will be
          * equivalent to just calling decrRefCount(). */
+        /*
+         * 当 dbAsyncDelete 函数通过 lazyfreeGetFreeEffort 函数，计算得到被淘汰键值对的删除开销之后，接下来的第三步，它就会把删除开销和宏定义 LAZYFREE_THRESHOLD（在 lazyfree.c 文件中）进行比较，这个宏定义的默认值是 64。
+         * 所以，当被淘汰键值对是包含超过 64 个元素的集合类型时，dbAsyncDelete 函数才会调用 bioCreateBackgroundJob 函数，来实际创建后台任务执行惰性删除。
+         */
+        //如果要淘汰的键值对包含超过64个元素
         if (free_effort > LAZYFREE_THRESHOLD && val->refcount == 1) {
             atomicIncr(lazyfree_objects,1);
-            bioCreateLazyFreeJob(lazyfreeFreeObject,1, val);
-            dictSetVal(db->dict,de,NULL);
+            bioCreateLazyFreeJob(lazyfreeFreeObject,1, val);//创建惰性删除的后台任务，交给后台线程执行
+            dictSetVal(db->dict,de,NULL);//将被淘汰键值对的value设置为NULL
         }
     }
 

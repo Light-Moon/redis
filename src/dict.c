@@ -409,6 +409,7 @@ dictEntry *dictAddOrFind(dict *d, void *key) {
 /* Search and remove an element. This is an helper function for
  * dictDelete() and dictUnlink(), please check the top comment
  * of those functions. */
+//dictGenericDelete函数原型，参数是待查找的哈希表，待查找的key，以及同步/异步删除标记
 static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
     uint64_t h, idx;
     dictEntry *he, *prevHe;
@@ -417,19 +418,21 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
     if (d->ht[0].used == 0 && d->ht[1].used == 0) return NULL;
 
     if (dictIsRehashing(d)) _dictRehashStep(d);
-    h = dictHashKey(d, key);
+    h = dictHashKey(d, key);//计算key的哈希值
 
     for (table = 0; table <= 1; table++) {
-        idx = h & d->ht[table].sizemask;
-        he = d->ht[table].table[idx];
+        idx = h & d->ht[table].sizemask;//根据key的哈希值获取它所在的哈希桶编号
+        he = d->ht[table].table[idx];//获取key所在哈希桶的第一个哈希项
         prevHe = NULL;
-        while(he) {
+        while(he) {//在哈希桶中逐一查找被删除的key是否存在
             if (key==he->key || dictCompareKeys(d, key, he->key)) {
                 /* Unlink the element from the list */
+                //如果找见被删除key了，那么将它从哈希桶的链表中去除
                 if (prevHe)
                     prevHe->next = he->next;
                 else
                     d->ht[table].table[idx] = he->next;
+                //如果要同步删除，那么就释放key和value的内存空间
                 if (!nofree) {
                     dictFreeKey(d, he);
                     dictFreeVal(d, he);
@@ -439,7 +442,7 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
                 return he;
             }
             prevHe = he;
-            he = he->next;
+            he = he->next;//当前key不是要查找的key，再找下一个
         }
         if (!dictIsRehashing(d)) break;
     }
@@ -448,6 +451,7 @@ static dictEntry *dictGenericDelete(dict *d, const void *key, int nofree) {
 
 /* Remove an element, returning DICT_OK on success or DICT_ERR if the
  * element was not found. */
+//同步删除函数，传给dictGenericDelete函数的nofree值为0
 int dictDelete(dict *ht, const void *key) {
     return dictGenericDelete(ht,key,0) ? DICT_OK : DICT_ERR;
 }
@@ -473,6 +477,7 @@ int dictDelete(dict *ht, const void *key) {
  * // Do something with entry
  * dictFreeUnlinkedEntry(entry); // <- This does not need to lookup again.
  */
+//异步删除函数，传给dictGenericDelete函数的nofree值为1
 dictEntry *dictUnlink(dict *ht, const void *key) {
     return dictGenericDelete(ht,key,1);
 }

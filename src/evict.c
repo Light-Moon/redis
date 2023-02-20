@@ -52,11 +52,15 @@
  * Empty entries have the key pointer set to NULL. */
 #define EVPOOL_SIZE 16
 #define EVPOOL_CACHED_SDS_SIZE 255
+/*
+ * 为了淘汰数据，Redis 定义了一个数组 EvictionPoolLRU，用来保存待淘汰的候选键值对。这个数组的元素类型是 evictionPoolEntry 结构体，该结构体保存了待淘汰键值对的空闲时间 idle、对应的 key 等信息。
+ * freeMemoryIfNeeded 函数在淘汰数据的循环流程中，就会更新这个待淘汰的候选键值对集合，也就是 EvictionPoolLRU 数组。
+ */
 struct evictionPoolEntry {
     unsigned long long idle;    /* Object idle time (inverse frequency for LFU) */
     sds key;                    /* Key name. */
-    sds cached;                 /* Cached SDS object for key name. */
-    int dbid;                   /* Key DB number. */
+    sds cached;                 /* Cached SDS object for key name. */ //缓存的SDS对象
+    int dbid;                   /* Key DB number. */ //待淘汰键值对的key所在的数据库ID
 };
 
 static struct evictionPoolEntry *EvictionPoolLRU;
@@ -144,9 +148,13 @@ void evictionPoolAlloc(void) {
 
 void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evictionPoolEntry *pool) {
     int j, k, count;
-    dictEntry *samples[server.maxmemory_samples];
+    //dictGetSomeKeys 函数采样的 key 的数量，是由 redis.conf 中的配置项 maxmemory-samples 决定的，该配置项的默认值是 5。
+    dictEntry *samples[server.maxmemory_samples];//采样后的集合，大小为maxmemory_samples
 
+    //先调用 dictGetSomeKeys 函数（在 dict.c 文件中），从待采样的哈希表中随机获取一定数量的 key。
+    //将待采样的哈希表sampledict、采样后的集合samples、以及采样数量maxmemory_samples，作为参数传给dictGetSomeKeys
     count = dictGetSomeKeys(sampledict,samples,server.maxmemory_samples);
+    //在这个循环流程中，evictionPoolPopulate 函数会调用 estimateObjectIdleTime 函数，来计算在采样集合中的每一个键值对的空闲时间
     for (j = 0; j < count; j++) {
         unsigned long long idle;
         sds key;
@@ -376,6 +384,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 
     /* Check if we are over the memory usage limit. If we are not, no need
      * to subtract the slaves output buffers. We can just return ASAP. */
+    //计算已使用的内存量
     mem_reported = zmalloc_used_memory();
     if (total) *total = mem_reported;
 
@@ -385,6 +394,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 
     /* Remove the size of slaves output buffers and AOF buffer from the
      * count of used memory. */
+    //将用于主从复制的复制缓冲区大小从已使用内存量中扣除
     mem_used = mem_reported;
     size_t overhead = freeMemoryGetNotCountedMemory();
     mem_used = (mem_used > overhead) ? mem_used-overhead : 0;
@@ -404,6 +414,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     if (mem_used <= server.maxmemory) return C_OK;
 
     /* Compute how much memory we need to free. */
+    //计算需要释放的内存量
     mem_tofree = mem_used - server.maxmemory;
 
     if (logical) *logical = mem_used;
@@ -556,10 +567,12 @@ int performEvictions(void) {
                  * so to start populate the eviction pool sampling keys from
                  * every DB. */
                 for (i = 0; i < server.dbnum; i++) {
-                    db = server.db+i;
+                    db = server.db+i;//对Redis server上的每一个数据库都执行
+                    //根据淘汰策略，决定使用全局哈希表还是设置了过期时间的key的哈希表
                     dict = (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) ?
                             db->dict : db->expires;
                     if ((keys = dictSize(dict)) != 0) {
+                        //将选择的哈希表dict传入evictionPoolPopulate函数，同时将全局哈希表也传给evictionPoolPopulate函数
                         evictionPoolPopulate(i, dict, db->dict, pool);
                         total_keys += keys;
                     }
@@ -567,10 +580,11 @@ int performEvictions(void) {
                 if (!total_keys) break; /* No keys to evict. */
 
                 /* Go backward from best to worst element to evict. */
+                //从数组最后一个key开始查找
                 for (k = EVPOOL_SIZE-1; k >= 0; k--) {
                     if (pool[k].key == NULL) continue;
                     bestdbid = pool[k].dbid;
-
+                    //从全局哈希表或是expire哈希表中，获取当前key对应的键值对；并将当前key从EvictionPoolLRU数组删除
                     if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
                         de = dictFind(server.db[pool[k].dbid].dict,
                             pool[k].key);
@@ -587,10 +601,11 @@ int performEvictions(void) {
 
                     /* If the key exists, is our pick. Otherwise it is
                      * a ghost and we need to try the next element. */
+                    //如果当前key对应的键值对不为空，选择当前key为被淘汰的key
                     if (de) {
                         bestkey = dictGetKey(de);
                         break;
-                    } else {
+                    } else {//否则，继续查找下个key
                         /* Ghost... Iterate again. */
                     }
                 }
@@ -619,6 +634,7 @@ int performEvictions(void) {
         }
 
         /* Finally remove the selected key. */
+        //一旦选到了被淘汰的 key，freeMemoryIfNeeded 函数就会根据 Redis server 的惰性删除配置，来执行同步删除或异步删除
         if (bestkey) {
             db = server.db+bestdbid;
             robj *keyobj = createStringObject(bestkey,sdslen(bestkey));
@@ -635,9 +651,10 @@ int performEvictions(void) {
              * we only care about memory used by the key space. */
             delta = (long long) zmalloc_used_memory();
             latencyStartMonitor(eviction_latency);
+            //如果配置了惰性删除，则进行异步删除
             if (server.lazyfree_lazy_eviction)
                 dbAsyncDelete(db,keyobj);
-            else
+            else //否则进行同步删除
                 dbSyncDelete(db,keyobj);
             latencyEndMonitor(eviction_latency);
             latencyAddSampleIfNeeded("eviction-del",eviction_latency);

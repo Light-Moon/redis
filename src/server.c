@@ -2093,8 +2093,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      *
      * Note that you can change the resolution altering the
      * LRU_CLOCK_RESOLUTION define. */
+    //默认情况下，每100毫秒调用getLRUClock函数更新一次全局LRU时钟值
     unsigned int lruclock = getLRUClock();
-    atomicSet(server.lruclock,lruclock);
+    atomicSet(server.lruclock,lruclock);//设置lruclock变量
 
     cronUpdateMemoryStats();
 
@@ -2692,8 +2693,8 @@ void initServerConfig(void) {
     server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.loading_process_events_interval_bytes = (1024*1024*2);
 
-    unsigned int lruclock = getLRUClock();
-    atomicSet(server.lruclock,lruclock);
+    unsigned int lruclock = getLRUClock();//调用getLRUClock函数计算全局LRU时钟值
+    atomicSet(server.lruclock,lruclock);//设置lruclock为刚计算的LRU时钟值
     resetServerSaveParams();
 
     appendServerSaveParams(60*60,1);  /* save after 1 hour and 1 change */
@@ -3261,7 +3262,7 @@ void initServer(void) {
         server.db[j].defrag_later = listCreate();
         listSetFreeMethod(server.db[j].defrag_later,(void (*)(void*))sdsfree);
     }
-    //生成用于淘汰的候选key集合
+    //Redis server 在执行 initSever 函数进行初始化时，会调用 evictionPoolAlloc 函数（在 evict.c 文件中）为 EvictionPoolLRU 数组分配内存空间，该数组用于保存淘汰的候选key集合
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
     server.pubsub_channels = dictCreate(&keylistDictType,NULL);
     server.pubsub_patterns = dictCreate(&keylistDictType,NULL);

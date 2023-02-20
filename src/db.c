@@ -59,9 +59,12 @@ void updateLFU(robj *val) {
 /* Low level key lookup API, not actually called directly from commands
  * implementations that should instead rely on lookupKeyRead(),
  * lookupKeyWrite() and lookupKeyReadWithFlags(). */
+//当一个键值对被访问时，访问操作最终都会调用 lookupKey 函数。
 robj *lookupKey(redisDb *db, robj *key, int flags) {
+    //查找键值对
     dictEntry *de = dictFind(db->dict,key->ptr);
     if (de) {
+        //获取键值对对应的redisObject结构体
         robj *val = dictGetVal(de);
 
         /* Update the access time for the ageing algorithm.
@@ -69,8 +72,10 @@ robj *lookupKey(redisDb *db, robj *key, int flags) {
          * a copy on write madness. */
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)){
             if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+                //如果使用了LFU策略，更新LFU计数值
                 updateLFU(val);
             } else {
+                //否则，调用LRU_CLOCK函数获取全局LRU时钟值
                 val->lru = LRU_CLOCK();
             }
         }
@@ -1448,8 +1453,9 @@ long long getExpire(redisDb *db, robj *key) {
 void propagateExpire(redisDb *db, robj *key, int lazy) {
     robj *argv[2];
 
+    //如果server启用了lazyfree-lazy-evict，那么argv[0]的值为unlink对象，否则为del对象
     argv[0] = lazy ? shared.unlink : shared.del;
-    argv[1] = key;
+    argv[1] = key;//被淘汰的key对象
     incrRefCount(argv[0]);
     incrRefCount(argv[1]);
 
