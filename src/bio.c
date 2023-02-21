@@ -128,6 +128,7 @@ void bioInit(void) {
      * function accepts in order to pass the job ID the thread is
      * responsible of. */
     for (j = 0; j < BIO_NUM_OPS; j++) {
+        //通用指针或泛指针，表示指针变量arg不指向一个确定的类型数据，作用仅仅是用来存放一个地址
         void *arg = (void*)(unsigned long) j;
         /*
          * pthread_create 函数一共有 4 个参数，分别是：
@@ -139,6 +140,7 @@ void bioInit(void) {
          * 在完成线程属性的设置后，接下来，bioInit 函数会通过一个 for 循环，来依次为每种后台任务创建一个线程。循环的次数是由 BIO_NUM_OPS 宏定义决定的，也就是 3 次。
          * 相应的，bioInit 函数就会调用 3 次 pthread_create 函数，并创建 3 个线程。bioInit 函数让这 3 个线程执行的函数都是 bioProcessBackgroundJobs。
          */
+        serverLog(LL_DEBUG,"Initialize Background Job Type %lu",j);
         if (pthread_create(&thread,&attr,bioProcessBackgroundJobs,arg) != 0) {
             serverLog(LL_WARNING,"Fatal: Can't initialize Background Jobs.");
             exit(1);
@@ -189,6 +191,13 @@ void bioCreateFsyncJob(int fd) {
     bioSubmitJob(BIO_AOF_FSYNC, job);
 }
 
+void bioCreateWriteTimestampJob(int fd){
+    struct bio_job *job = zmalloc(sizeof(*job));
+    job->fd = fd;
+
+    bioSubmitJob(BIO_WRITE_TIMESTAMP, job);
+}
+
 //处理后台任务
 void *bioProcessBackgroundJobs(void *arg) {
     struct bio_job *job;
@@ -212,6 +221,9 @@ void *bioProcessBackgroundJobs(void *arg) {
         break;
     case BIO_LAZY_FREE:
         redis_set_thread_title("bio_lazy_free");
+        break;
+    case BIO_WRITE_TIMESTAMP:
+        redis_set_thread_title("bio_write_timestamp");
         break;
     }
 
@@ -250,8 +262,10 @@ void *bioProcessBackgroundJobs(void *arg) {
 
         /* Process the job accordingly to its type. */
         if (type == BIO_CLOSE_FILE) {
+            serverLog(LL_DEBUG, "Start to process background close file job");
             close(job->fd);
         } else if (type == BIO_AOF_FSYNC) {
+            serverLog(LL_DEBUG, "Start to process background aof fsync job");
             /* The fd may be closed by main thread and reused for another
              * socket, pipe, or file. We just ignore these errno because
              * aof fsync did not really fail. */
@@ -270,8 +284,12 @@ void *bioProcessBackgroundJobs(void *arg) {
                 atomicSet(server.aof_bio_fsync_status,C_OK);
             }
         } else if (type == BIO_LAZY_FREE) {
+            serverLog(LL_DEBUG, "Start to process background lazy free job");
             job->free_fn(job->free_args);
-        } else {
+        } else if (type == BIO_WRITE_TIMESTAMP) {
+            serverLog(LL_DEBUG, "Start to process background write timestamp to log file job");
+            //TODO:
+        }else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
         zfree(job);
