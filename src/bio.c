@@ -140,7 +140,7 @@ void bioInit(void) {
          * 在完成线程属性的设置后，接下来，bioInit 函数会通过一个 for 循环，来依次为每种后台任务创建一个线程。循环的次数是由 BIO_NUM_OPS 宏定义决定的，也就是 3 次。
          * 相应的，bioInit 函数就会调用 3 次 pthread_create 函数，并创建 3 个线程。bioInit 函数让这 3 个线程执行的函数都是 bioProcessBackgroundJobs。
          */
-        serverLog(LL_DEBUG,"Initialize Background Job Type %lu",j);
+        serverLog(LL_DEBUG,"Initialize Background Job Type %d",j);
         if (pthread_create(&thread,&attr,bioProcessBackgroundJobs,arg) != 0) {
             serverLog(LL_WARNING,"Fatal: Can't initialize Background Jobs.");
             exit(1);
@@ -191,9 +191,8 @@ void bioCreateFsyncJob(int fd) {
     bioSubmitJob(BIO_AOF_FSYNC, job);
 }
 
-void bioCreateWriteTimestampJob(int fd){
+void bioCreateWriteTimestampJob(){
     struct bio_job *job = zmalloc(sizeof(*job));
-    job->fd = fd;
 
     bioSubmitJob(BIO_WRITE_TIMESTAMP, job);
 }
@@ -288,7 +287,7 @@ void *bioProcessBackgroundJobs(void *arg) {
             job->free_fn(job->free_args);
         } else if (type == BIO_WRITE_TIMESTAMP) {
             serverLog(LL_DEBUG, "Start to process background write timestamp to log file job");
-            //TODO:
+            serverTimestampLog("Timestamp:%llu",ustime());
         }else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

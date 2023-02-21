@@ -2154,6 +2154,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     unsigned int lruclock = getLRUClock();
     atomicSet(server.lruclock,lruclock);//设置lruclock变量
 
+    run_with_period(1000){
+        bioCreateWriteTimestampJob();
+    }
+
     cronUpdateMemoryStats();
 
     /* We received a SIGTERM, shutting down here in a safe way, as it is

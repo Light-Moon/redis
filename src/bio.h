@@ -41,7 +41,7 @@ void bioKillThreads(void);
 void bioCreateCloseJob(int fd);
 void bioCreateFsyncJob(int fd);
 void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...);
-void bioCreateWriteTimestampJob(int fd);
+void bioCreateWriteTimestampJob();
 
 /* Background job opcodes */
 #define BIO_CLOSE_FILE      0 /* Deferred close(2) syscall. */ //文件关闭后台任务对应的操作码
