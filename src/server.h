@@ -2231,10 +2231,14 @@ int prepareForShutdown(int flags);
 #ifdef __GNUC__
 void _serverLog(int level, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
+void _serverLogCustomLogfile(int level, const char *logfile, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
 #else
 void _serverLog(int level, const char *fmt, ...);
+void _serverLogCustomLogfile(int level, const char *logfile, const char *fmt, ...);
 #endif
 void serverLogRaw(int level, const char *msg);
+void serverLogRawCustomLogfile(int level, const char *msg, const char *logfile);
 void serverLogFromHandler(int level, const char *msg);
 void usage(void);
 void updateDictResizePolicy(void);
@@ -2745,6 +2749,11 @@ void makeThreadKillable(void);
 #define serverLog(level, ...) do {\
         if (((level)&0xff) < server.verbosity) break;\
         _serverLog(level, __VA_ARGS__);\
+    } while(0)
+
+/* The default level of timestamp logs is LL_WARNING. */
+#define serverTimestampLog(...) do {\
+        _serverLogCustomLogfile(LL_WARNING, "redis-timestamp.log", __VA_ARGS__);\
     } while(0)
 
 /* TLS stuff */
