@@ -1765,20 +1765,22 @@ int rewriteAppendOnlyFileBackground(void) {
 
     if (hasActiveChildProcess()) return C_ERR;
     if (aofCreatePipes() != C_OK) return C_ERR;
-    if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {
+    //AOF 重写和 RDB 创建是比较类似的，它们都会创建一个子进程来遍历所有的数据库，并把数据库中的每个键值对记录到文件中。
+    if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {//创建子进程
         char tmpfile[256];
 
         /* Child */
         redisSetProcTitle("redis-aof-rewrite");
         redisSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
+        //子进程调用rewriteAppendOnlyFile进行AOF重写
         if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_AOF_COW_SIZE, "AOF rewrite");
             exitFromChild(0);
         } else {
             exitFromChild(1);
         }
-    } else {
+    } else {//父进程执行的逻辑
         /* Parent */
         if (childpid == -1) {
             serverLog(LL_WARNING,
