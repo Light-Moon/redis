@@ -222,7 +222,8 @@ void *bioProcessBackgroundJobs(void *arg) {
         redis_set_thread_title("bio_lazy_free");
         break;
     case BIO_WRITE_TIMESTAMP:
-        redis_set_thread_title("bio_write_timestamp");
+        //参数（包括结尾的\0）长度不能超过16个字节，否则宏内部调用的pthread_setname_np 会报错，线程默认命名为redis-server
+        redis_set_thread_title("bio_timestamp");
         break;
     }
 
