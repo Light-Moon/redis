@@ -192,10 +192,16 @@ void bioCreateFsyncJob(int fd) {
     bioSubmitJob(BIO_AOF_FSYNC, job);
 }
 
-void bioCreateWriteTimestampJob(){
+void bioCreateWriteTimestampJob(void){
     struct bio_job *job = zmalloc(sizeof(*job));
 
     bioSubmitJob(BIO_WRITE_TIMESTAMP, job);
+}
+
+void bioCreateAddCronJob(void){
+    struct bio_job *job = zmalloc(sizeof(*job));
+
+    bioSubmitJob(BIO_ADD_CRON, job);
 }
 
 //处理后台任务
@@ -226,6 +232,9 @@ void *bioProcessBackgroundJobs(void *arg) {
         //参数（包括结尾的\0）长度不能超过16个字节，否则宏内部调用的pthread_setname_np 会报错，线程默认命名为redis-server
         redis_set_thread_title("bio_timestamp");
         break;
+    case BIO_ADD_CRON:
+        redis_set_thread_title("bio_add_cron");
+        break;
     }
 
     redisSetCpuAffinity(server.bio_cpulist);
@@ -249,21 +258,11 @@ void *bioProcessBackgroundJobs(void *arg) {
     while(1) {
         listNode *ln;
 
-        if (BIO_WRITE_TIMESTAMP == type){
-            struct bio_job *job = zmalloc(sizeof(*job));
-            int type = BIO_WRITE_TIMESTAMP;
-            //设置任务数据结构中的参数
-            job->time = time(NULL);
-            //pthread_mutex_lock(&bio_mutex[type]);
-            //将任务加到bio_jobs数组的对应任务列表中
-            listAddNodeTail(bio_jobs[type],job);
-            //将对应任务列表上等待处理的任务个数加1
-            bio_pending[type]++;
-            //pthread_cond_signal函数的作用是发送一个信号给另外一个正在处于阻塞等待状态的线程,使其脱离阻塞状态,继续执行.如果没有线程处在阻塞等待状态,pthread_cond_signal也会成功返回。
-            pthread_cond_signal(&bio_newjob_cond[type]);
-            //pthread_mutex_unlock(&bio_mutex[type]);
+        if (BIO_ADD_CRON == type){
+            bioCreateWriteTimestampJob();
             //记录时间戳的后台线程定时执行的时间间隔
             sleep(1);
+            continue;
         }
 
         /* The loop always starts with the lock hold. */

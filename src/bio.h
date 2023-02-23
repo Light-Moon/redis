@@ -41,13 +41,15 @@ void bioKillThreads(void);
 void bioCreateCloseJob(int fd);
 void bioCreateFsyncJob(int fd);
 void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...);
-void bioCreateWriteTimestampJob();
+void bioCreateWriteTimestampJob(void);
+void bioCreateAddCronJob(void);
 
 /* Background job opcodes */
 #define BIO_CLOSE_FILE      0 /* Deferred close(2) syscall. */ //文件关闭后台任务对应的操作码
 #define BIO_AOF_FSYNC       1 /* Deferred AOF fsync. */ //AOF日志同步写回后台任务对应的操作码
 #define BIO_LAZY_FREE       2 /* Deferred objects freeing. */ //惰性删除后台任务对应的操作码
 #define BIO_WRITE_TIMESTAMP 3 //追加写时间戳后台任务对应的操作码
-#define BIO_NUM_OPS         4 //3
+#define BIO_ADD_CRON        4 //为其他后台线程添加定时Job的后台任务对应的操作码
+#define BIO_NUM_OPS         5 //3
 
 #endif
