@@ -60,6 +60,9 @@
 
 #include "server.h"
 #include "bio.h"
+
+int timestampCronloops = 0;
+
 //保存线程描述符的数组
 static pthread_t bio_threads[BIO_NUM_OPS];
 //保存互斥锁的数组
@@ -204,6 +207,35 @@ void bioCreateAddCronJob(void){
     bioSubmitJob(BIO_ADD_CRON, job);
 }
 
+int serverTimestampCron(){
+    timestamp_run_with_period(1000) {
+        bioCreateWriteTimestampJob();
+    }
+    timestampCronloops++;
+    return 1000/server.hz;
+}
+
+void (){
+    //创建事件循环框架要用的aeEventLoop结构体，并赋值给eventLoop变量
+    aeEventLoop *eventLoop = aeCreateEventLoop(128);
+    if (eventLoop == NULL) {
+        serverLog(LL_WARNING,
+                  "Failed creating the timestamp event loop. Error message: '%s'",
+                  strerror(errno));
+        exit(1);
+    }
+
+    //创建计时器回调，为bio_add_cron后台任务创建定时事件。
+    if (aeCreateTimeEvent(eventLoop, 1, serverTimestampCron, NULL, NULL) == AE_ERR) {
+        serverPanic("Can't create timestamp event loop timers.");
+        exit(1);
+    }
+
+    //运行事件驱动框架
+    aeMain(eventLoop);
+    aeDeleteEventLoop(eventLoop);
+}
+
 //处理后台任务
 void *bioProcessBackgroundJobs(void *arg) {
     struct bio_job *job;
@@ -234,6 +266,7 @@ void *bioProcessBackgroundJobs(void *arg) {
         break;
     case BIO_ADD_CRON:
         redis_set_thread_title("bio_add_cron");
+        aeCreateTimestampEventLoop();
         break;
     }
 
@@ -259,9 +292,6 @@ void *bioProcessBackgroundJobs(void *arg) {
         listNode *ln;
 
         if (BIO_ADD_CRON == type){
-            bioCreateWriteTimestampJob();
-            //记录时间戳的后台线程定时执行的时间间隔
-            sleep(1);
             continue;
         }
 
