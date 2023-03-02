@@ -215,7 +215,7 @@ int serverTimestampCron(){
     return 1000/server.hz;
 }
 
-void (){
+void aeCreateTimestampEventLoop(){
     //创建事件循环框架要用的aeEventLoop结构体，并赋值给eventLoop变量
     aeEventLoop *eventLoop = aeCreateEventLoop(128);
     if (eventLoop == NULL) {
@@ -335,7 +335,7 @@ void *bioProcessBackgroundJobs(void *arg) {
             job->free_fn(job->free_args);
         } else if (type == BIO_WRITE_TIMESTAMP) {
             serverLog(LL_DEBUG, "Start to process background write timestamp to log file job");
-            serverTimestampLog("Timestamp:%llu",ustime());
+            serverTimestampLog("#timestamp:%lld", ustime());
         }else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
