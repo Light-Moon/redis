@@ -60,6 +60,7 @@
 
 #include "server.h"
 #include "bio.h"
+#include "timestamp_log.h"
 
 int timestampCronloops = 0;
 
