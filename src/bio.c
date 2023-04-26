@@ -336,7 +336,8 @@ void *bioProcessBackgroundJobs(void *arg) {
             job->free_fn(job->free_args);
         } else if (type == BIO_WRITE_TIMESTAMP) {
             serverLog(LL_DEBUG, "Start to process background write timestamp to log file job");
-            serverTimestampLog("#timestamp:%lld", ustime());
+            //serverTimestampLog("#timestamp:%lld", ustime());
+            serverTimestampLog("");
         }else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

@@ -7,6 +7,7 @@
 /* Custom timestamp log function for node alive check. */
 void serverLogRawCustomLogfile(int level, const char *logfile, const char *msg) {
     const int syslogLevelMap[] = { LOG_DEBUG, LOG_INFO, LOG_NOTICE, LOG_WARNING };
+    const char *c = ".-*#";
     FILE *fp;
     char buf[64];
     int rawmode = (level & LL_RAW);
@@ -21,6 +22,7 @@ void serverLogRawCustomLogfile(int level, const char *logfile, const char *msg) 
     if (rawmode) {
         fprintf(fp,"%s",msg);
     } else {
+        int off;
         struct timeval tv;
         int role_char;
         pid_t pid = getpid();
@@ -28,6 +30,8 @@ void serverLogRawCustomLogfile(int level, const char *logfile, const char *msg) 
         gettimeofday(&tv,NULL);
         struct tm tm;
         nolocks_localtime(&tm,tv.tv_sec,server.timezone,server.daylight_active);
+        off = strftime(buf,sizeof(buf),"%d %b %Y %H:%M:%S",&tm);
+        //snprintf(buf+off,sizeof(buf)-off,"%03d",(int)tv.tv_usec/1000);
         if (server.sentinel_mode) {
             role_char = 'X'; /* Sentinel. */
         } else if (pid != server.pid) {
@@ -38,7 +42,7 @@ void serverLogRawCustomLogfile(int level, const char *logfile, const char *msg) 
         //demo: 9395:M 21 Feb 2023 17:09:03.087 . Initialize Background Job Type 0
         //fprintf(fp,"%d:%c %s %c %s\n",(int)getpid(),role_char, buf,c[level],msg);
         //demo: last time of node[M] alive check: 02 Mar 2023 17:41:58 ...
-        fprintf(fp,"last time of node[%c] alive check: %s %s\n", role_char, buf, msg);
+        fprintf(fp,"last time of node[%c] alive check ==> #datetime:%s %s\n", role_char, buf, msg);
     }
     fflush(fp);
 
